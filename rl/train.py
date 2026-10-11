@@ -10,6 +10,7 @@ import json
 import os
 import random
 import time
+from collections import deque
 
 import numpy as np
 import torch
@@ -31,20 +32,24 @@ class Replay:
         self.nbits = np.zeros((cap, N_CELLS), np.uint8)
         self.ntray = np.zeros((cap, N_PIECES), np.uint8)
         self.done = np.zeros(cap, np.float32)
+        self.disc = np.zeros(cap, np.float32)
 
     def add_many(self, items):
-        """items: list of ((board, tray), reward, (board, tray) or None)."""
+        """items: list of ((board, tray), discounted return, (board, tray) or None, bootstrap discount).
+
+        TD target for the first afterstate = return + (1 - done) * discount * V(next afterstate)."""
         if not items:
             return
-        b = boards_to_bits([s[0] for s, _, _ in items])
-        nb = boards_to_bits([(n[0] if n else 0) for _, _, n in items])
-        for k, (s, r, n) in enumerate(items):
+        b = boards_to_bits([s[0] for s, _, _, _ in items])
+        nb = boards_to_bits([(n[0] if n else 0) for _, _, n, _ in items])
+        for k, (s, r, n, disc) in enumerate(items):
             j = self.i
             self.bits[j], self.nbits[j] = b[k], nb[k]
             self.tray[j] = tray_vector(s[1])
             self.ntray[j] = tray_vector(n[1]) if n else 0
             self.r[j] = r
             self.done[j] = n is None
+            self.disc[j] = disc
             self.i = (self.i + 1) % self.cap
             self.n = min(self.n + 1, self.cap)
 
@@ -52,7 +57,8 @@ class Replay:
         idx = np.random.randint(0, self.n, size)
         t = lambda a: torch.from_numpy(a).to(device)
         return (t(bits_to_grid(self.bits[idx])), t(self.tray[idx].astype(np.float32)), t(self.r[idx]),
-                t(bits_to_grid(self.nbits[idx])), t(self.ntray[idx].astype(np.float32)), t(self.done[idx]))
+                t(bits_to_grid(self.nbits[idx])), t(self.ntray[idx].astype(np.float32)), t(self.done[idx]),
+                t(self.disc[idx]))
 
 
 def evaluate(agent, games, max_moves, seed0=1_000_000):
@@ -80,6 +86,7 @@ def main():
     ap.add_argument("--steps", type=int, default=1_000_000, help="total env moves")
     ap.add_argument("--envs", type=int, default=128)
     ap.add_argument("--gamma", type=float, default=0.99)
+    ap.add_argument("--nstep", type=int, default=1, help="n-step TD returns (1 = plain TD(0))")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--updates", type=int, default=2, help="gradient steps per env step batch")
@@ -118,7 +125,12 @@ def main():
     rng = random.Random(args.seed)
 
     envs = [Env(args.seed * 100_000 + i) for i in range(args.envs)]
-    prev = [None] * args.envs                   # last afterstate per env
+    # per env: afterstates still waiting for n rewards -> [afterstate, [scaled rewards after it]]
+    hist = [deque() for _ in range(args.envs)]
+    g_pow = [args.gamma ** k for k in range(args.nstep + 1)]
+
+    def ret(rs):
+        return sum(g_pow[k + 1] * r for k, r in enumerate(rs))
     ep_scores, ep_moves = [], []
     steps = updates = 0
     next_eval = args.eval_every
@@ -139,33 +151,36 @@ def main():
         trans = []
         for i, mv in enumerate(moves):
             env = envs[i]
-            if mv is None:                       # game over
-                if prev[i] is not None:
-                    trans.append((prev[i], 0.0, None))
+            h = hist[i]
+            if mv is None:                       # game over: everything pending ends with V = 0
+                trans += [(s, ret(rs), None, 0.0) for s, rs in h]
+                h.clear()
                 ep_scores.append(env.score)
                 ep_moves.append(env.moves)
                 env.reset()
-                prev[i] = None
                 continue
             slot, pl, r, after = mv
-            if prev[i] is not None:
-                trans.append((prev[i], r * REWARD_SCALE, after))
+            for item in h:
+                item[1].append(r * REWARD_SCALE)
+            if h and len(h[0][1]) == args.nstep:  # oldest has n rewards: bootstrap from this afterstate
+                s, rs = h.popleft()
+                trans.append((s, ret(rs), after, g_pow[args.nstep]))
+            h.append([after, []])
             env.step(slot, pl)
-            prev[i] = after
             steps += 1
-            if env.moves >= args.max_moves:      # truncate (no terminal signal)
+            if env.moves >= args.max_moves:      # truncate (no terminal signal): drop pending
                 ep_scores.append(env.score)
                 ep_moves.append(env.moves)
                 env.reset()
-                prev[i] = None
+                h.clear()
         rb.add_many(trans)
 
         if rb.n >= args.warmup:
             net.train()
             for _ in range(args.updates):
-                g, t, r, ng, nt, d = rb.sample(args.batch, dev)
+                g, t, r, ng, nt, d, disc = rb.sample(args.batch, dev)
                 with torch.no_grad():
-                    target = args.gamma * (r + (1 - d) * tgt(ng, nt))
+                    target = r + (1 - d) * disc * tgt(ng, nt)
                 v = net(g, t)
                 loss = F.smooth_l1_loss(v, target)
                 opt.zero_grad()

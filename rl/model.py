@@ -30,7 +30,8 @@ class ValueNet(nn.Module):
 
     def forward(self, grid, tray):
         """grid: (N, 8, 15) occupancy, tray: (N, 26) piece counts -> (N,) value."""
-        x = torch.cat([grid.unsqueeze(1), self.static.expand(len(grid), -1, -1, -1)], 1)
+        # grid.size(0) (not len) keeps the batch dimension dynamic in ONNX export
+        x = torch.cat([grid.unsqueeze(1), self.static.expand(grid.size(0), -1, -1, -1)], 1)
         x = torch.relu(self.stem(x))
         x = torch.relu(self.reduce(self.body(x))).flatten(1)
         t = torch.relu(self.tray(tray))

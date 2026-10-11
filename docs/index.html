@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blocky AI</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<style>
+  :root {
+    --bg: #1e1e1e; --panel: #262626; --cell: #2e2e2e; --line: #3a3a3a;
+    --text: #e6e6e6; --muted: #9a9a9a; --accent: #6ed6be; --accent2: #e06e5a; --gold: #f5c446;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 16px; }
+  header h1 { margin: 4px 0 2px; font-size: 26px; letter-spacing: .5px; }
+  header h1 span { color: var(--gold); }
+  header p { margin: 0 0 14px; color: var(--muted); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button, .btn { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+         border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  .tabs button.on { background: var(--accent); color: #102; border-color: var(--accent); font-weight: 700; }
+  .btn:hover, .tabs button:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--accent2); border-color: var(--accent2); color: #fff; font-weight: 700; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  main { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  .boardcard { flex: 0 1 480px; min-width: 0; }
+  #board { width: 100%; max-width: 480px; display: block; touch-action: manipulation; border-radius: 12px; background: var(--bg); }
+  .side { flex: 1 1 360px; min-width: 0; }
+  .side h2 { font-size: 16px; margin: 4px 0 8px; }
+  .picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; }
+  .picker canvas { width: 100%; aspect-ratio: 1; background: var(--panel); border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+  .picker canvas:hover { border-color: var(--muted); }
+  .picker.full canvas { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
+  .steps { list-style: none; padding: 0; margin: 10px 0; }
+  .steps li { padding: 6px 10px; border-radius: 8px; margin-bottom: 4px; background: var(--panel); cursor: pointer; }
+  .steps li.on { outline: 2px solid var(--gold); }
+  .steps .num { display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: #fafafa; color: #222;
+                text-align: center; font-weight: 700; margin-right: 8px; line-height: 22px; }
+  .muted { color: var(--muted); }
+  .warn { color: var(--accent2); }
+  .status { min-height: 1.5em; }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px; font: inherit; }
+  .help { font-size: 13px; color: var(--muted); }
+  .help b { color: var(--text); }
+  footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
+  footer a { color: var(--accent); }
+  #selftest { white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Blocky <span>AI</span></h1>
+    <p>강화학습(Afterstate TD 학습)으로 훈련한 AI가 대기 블록 3개를 놓을 순서와 위치를 추천합니다.</p>
+  </header>
+
+  <div class="tabs">
+    <button id="tab-assist" class="on">추천 모드</button>
+    <button id="tab-watch">AI 관전 모드</button>
+  </div>
+
+  <main>
+    <div class="boardcard">
+      <canvas id="board" width="480" height="780"></canvas>
+    </div>
+
+    <div class="side">
+      <section id="assist-panel">
+        <h2>블록 선택 <span class="muted">(클릭, 최대 3개)</span></h2>
+        <div id="picker" class="picker"></div>
+        <div class="status" id="status"></div>
+        <ul class="steps" id="steps"></ul>
+        <div class="row">
+          <button class="btn primary" id="apply" disabled>추천대로 적용</button>
+          <button class="btn" id="prev" disabled>◀</button>
+          <span id="viewlabel" class="muted">전체 보기</span>
+          <button class="btn" id="next" disabled>▶</button>
+        </div>
+        <div class="row">
+          <button class="btn" id="clearsel">선택 취소</button>
+          <button class="btn" id="clearboard">보드 비우기</button>
+          <label class="muted">탐색 폭
+            <select id="beam">
+              <option value="4">빠름</option>
+              <option value="12" selected>보통</option>
+              <option value="32">정확 (느림)</option>
+            </select>
+          </label>
+        </div>
+        <div class="help">
+          <p><b>사용법</b> ① 보드의 삼각형을 클릭해 실제 게임 보드와 똑같이 채웁니다. ② 오른쪽에서 지금 나온 블록 3개를 고릅니다.
+            ③ 보드에 표시된 <b>1·2·3 순서</b>대로 두면 됩니다. ◀ ▶ 로 단계별로 보면 지워질 줄이 밝게 표시됩니다.
+            ④ <b>추천대로 적용</b>을 누르면 줄 삭제까지 반영되고 다음 3개를 고를 수 있습니다.</p>
+          <p>아래 대기 블록을 클릭하면 선택이 취소됩니다.</p>
+        </div>
+      </section>
+
+      <section id="watch-panel" hidden>
+        <h2>AI 관전 모드</h2>
+        <p class="muted">AI가 무작위로 나오는 블록으로 혼자 게임합니다.</p>
+        <div class="row">
+          <button class="btn primary" id="wplay">▶ 시작</button>
+          <button class="btn" id="wnew">새 게임</button>
+          <label class="muted">속도
+            <select id="wspeed">
+              <option value="900">느리게</option>
+              <option value="400" selected>보통</option>
+              <option value="80">빠르게</option>
+            </select>
+          </label>
+        </div>
+        <p id="wstatus" class="status muted"></p>
+      </section>
+
+      <p id="engine" class="help"></p>
+      <div id="selftest"></div>
+    </div>
+  </main>
+
+  <footer>
+    소스·학습 기록: <a href="https://github.com/kym343/Blocky">github.com/kym343/Blocky</a> ·
+    <a href="https://github.com/kym343/Blocky/blob/main/docs/RL_LOG.md">강화학습 실험 기록 (RL_LOG.md)</a>
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
+<script src="web/app.js"></script>
+</body>
+</html>

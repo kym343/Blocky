@@ -1,0 +1,58 @@
+{
+  "version": "1.0.1",
+  "date": "2026-10-11",
+  "bump": "patch",
+  "notes": "exp1 같은 설정으로 더 학습 (1.8M 수 시점 best)",
+  "source": {
+    "run": "exp1",
+    "checkpoint": "runs/exp1/model_best.pt",
+    "train_steps": 1800081,
+    "train_eval_mean": 536.2
+  },
+  "arch": {
+    "ch": 64,
+    "blocks": 4
+  },
+  "train_config": {
+    "name": "exp1",
+    "steps": 2000000,
+    "envs": 128,
+    "gamma": 0.99,
+    "lr": 0.0003,
+    "batch": 512,
+    "updates": 2,
+    "replay": 500000,
+    "warmup": 20000,
+    "eps_start": 0.1,
+    "eps_end": 0.005,
+    "eps_frac": 0.3,
+    "target_every": 1000,
+    "ch": 64,
+    "blocks": 4,
+    "max_moves": 3000,
+    "eval_every": 100000,
+    "eval_games": 64,
+    "seed": 0,
+    "init": null
+  },
+  "benchmark": {
+    "greedy": {
+      "games": 200,
+      "mean": 538.0,
+      "median": 451.0,
+      "min": 125,
+      "max": 1704,
+      "moves_mean": 88.9,
+      "seconds": 10
+    },
+    "plan3": {
+      "games": 64,
+      "mean": 1004.6,
+      "median": 759.0,
+      "min": 227,
+      "max": 3878,
+      "moves_mean": 158.7,
+      "seconds": 131
+    }
+  }
+}

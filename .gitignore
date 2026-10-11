@@ -4,3 +4,6 @@ highscore.json
 runs/
 *.pt
 *.7z
+!models/**/*.pt
+/*.png
+/*.PNG

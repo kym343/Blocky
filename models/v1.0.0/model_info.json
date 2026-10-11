@@ -1,0 +1,37 @@
+{
+  "version": "1.0.0",
+  "date": "2026-10-11",
+  "bump": "initial",
+  "notes": "exp1 기본 설정, 1.0M 수 시점 best",
+  "source": {
+    "run": null,
+    "checkpoint": "models/v1.0.0/blocky_v1.0.0.pt",
+    "train_steps": 1000113,
+    "train_eval_mean": 491.7
+  },
+  "arch": {
+    "ch": 64,
+    "blocks": 4
+  },
+  "train_config": {},
+  "benchmark": {
+    "greedy": {
+      "games": 200,
+      "mean": 451.6,
+      "median": 407.0,
+      "min": 93,
+      "max": 1735,
+      "moves_mean": 76.3,
+      "seconds": 27
+    },
+    "plan3": {
+      "games": 64,
+      "mean": 893.1,
+      "median": 709.5,
+      "min": 159,
+      "max": 2844,
+      "moves_mean": 142.1,
+      "seconds": 168
+    }
+  }
+}

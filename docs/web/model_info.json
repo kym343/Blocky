@@ -1,0 +1,8 @@
+{
+  "version": "1.0.1",
+  "train_steps": 1800081,
+  "plan3_mean": 1004.6,
+  "plan3_max": 3878,
+  "greedy_mean": 538.0,
+  "greedy_max": 1704
+}

@@ -1,6 +1,8 @@
 """Blocky AI app: recommend moves for 3 chosen pieces, or watch the AI play.
 
-Run: python ai_app.py [model.pt]      (default: runs/exp1/model_best.pt)
+Run: python ai_app.py [model.pt]      (default: newest registered version in models/, which is also the best)
+
+[모델 선택] 오른쪽 아래 목록 클릭 또는 M 키로 버전 전환 (버전별 벤치마크 점수 표시)
 
 [추천 모드]
   - 보드 클릭: 칸 채우기/비우기 (실제 게임 보드와 똑같이 맞추기)
@@ -12,6 +14,8 @@ Run: python ai_app.py [model.pt]      (default: runs/exp1/model_best.pt)
 Tab: 모드 전환,  Esc: 종료
 """
 
+import glob
+import json
 import os
 import random
 import sys
@@ -23,7 +27,7 @@ from blocky_core import CELLS, PIECES, tri_vertices
 from rl.fastenv import IDX, Env
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-W, H = 980, 820
+W, H = 980, 930
 LEFT_W = 480
 PANEL_X = 510
 PICK_COLS, PICK_CELL, PICK_EDGE = 6, 74, 24
@@ -32,6 +36,36 @@ MANUAL = (150, 150, 165)          # cells filled by hand in recommend mode
 LABEL_BG = (250, 250, 250)
 LABEL_FG = (30, 30, 30)
 HINT_C = (160, 160, 160)
+MODEL_Y = 765                     # model list area (right panel, both modes)
+
+
+def version_key(v):
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except ValueError:
+        return (-1,)
+
+
+def list_models():
+    """Registered versions, newest first: list of (info, checkpoint path)."""
+    out = []
+    for path in glob.glob(os.path.join(ROOT, "models", "v*", "model_info.json")):
+        with open(path, encoding="utf-8") as f:
+            info = json.load(f)
+        pt = os.path.join(os.path.dirname(path), f"blocky_v{info['version']}.pt")
+        if os.path.exists(pt):
+            out.append((info, pt))
+    return sorted(out, key=lambda m: version_key(m[0]["version"]), reverse=True)
+
+
+def model_summary(info):
+    b = info.get("benchmark")
+    steps = (info.get("source") or {}).get("train_steps") or info.get("train_steps")
+    s = f"{steps / 1e6:.1f}M수 학습" if steps else ""
+    if b:
+        return (f"3개 계획 평균 {b['plan3']['mean']:.0f} · 최고 {b['plan3']['max']}  |  "
+                f"1수씩 평균 {b['greedy']['mean']:.0f} · 최고 {b['greedy']['max']}  |  {s}")
+    return s
 
 
 def mask_cells(mask):
@@ -73,7 +107,7 @@ def board_cell_at(pos):
 
 
 class AIApp:
-    def __init__(self, model_path):
+    def __init__(self, model_path=None):
         pygame.init()
         pygame.display.set_caption("Blocky AI")
         self.screen = pygame.display.set_mode((W, H))
@@ -83,18 +117,57 @@ class AIApp:
         self.font_b = pygame.font.SysFont("malgungothic", 20, bold=True)
         self.font_num = pygame.font.SysFont("arial", 18, bold=True)
         self.font_small = pygame.font.SysFont("arial", 11)
+        self.font_small2 = pygame.font.SysFont("malgungothic", 13)
         self.rng = random.Random()
         self.agent, self.model_msg = None, ""
-        try:
-            from rl.agent import Agent
-            self.agent = Agent.from_file(model_path)
-            self.model_msg = f"모델: {os.path.relpath(model_path, ROOT)}"
-        except Exception as e:  # noqa: BLE001 - show any load error in the UI
-            self.model_msg = f"모델을 불러오지 못함: {e}"
+        self.models = list_models()
+        if model_path:                            # explicit checkpoint from the command line
+            self.models.insert(0, ({"version": "custom", "notes": os.path.relpath(model_path, ROOT)}, model_path))
+        self.agents = {}
+        self.model_i = 0
+        self.model_rects = []
         self.mode = "assist"
         self.fading = []
         self.assist_reset()
         self.watch_reset()
+        if self.models:
+            self.select_model(0)
+        else:
+            self.model_msg = "등록된 모델이 없음 (models/ 폴더)"
+
+    def select_model(self, i):
+        info, path = self.models[i]
+        try:
+            if path not in self.agents:
+                from rl.agent import Agent
+                self.agents[path] = Agent.from_file(path)
+            self.agent = self.agents[path]
+            self.model_i = i
+            self.model_msg = f"모델 v{info['version']}"
+        except Exception as e:  # noqa: BLE001 - show any load error in the UI
+            self.agent, self.model_msg = None, f"모델을 불러오지 못함: {e}"
+        self.replan()
+
+    def draw_models(self):
+        x, y = PANEL_X, MODEL_Y
+        pygame.draw.line(self.screen, (50, 50, 50), (x, y - 12), (W - 20, y - 12), 1)
+        self.text("모델 버전  (클릭 / M 키 · 기본 = 최신 = 최고 성능)", (x, y), self.font_b)
+        y += 32
+        self.model_rects = []
+        for i, (info, _) in enumerate(self.models[:5]):
+            rect = pygame.Rect(x - 6, y - 2, W - 20 - x + 6, 30)
+            on = i == self.model_i
+            if on:
+                pygame.draw.rect(self.screen, (52, 64, 60), rect, border_radius=6)
+            tag = " 최신" if i == 0 and info["version"] != "custom" else ""
+            self.text(f"v{info['version']}{tag}", (x, y + 2), self.font_b if on else self.font,
+                      ui.SCORE_C if on else ui.TEXT_C)
+            self.text(model_summary(info), (x + 118, y + 5), self.font_small2, HINT_C)
+            self.model_rects.append((rect, i))
+            y += 32
+        info = self.models[self.model_i][0] if self.models else {}
+        if info.get("notes"):
+            self.text(f"메모: {info['notes']}", (x, y + 2), color=HINT_C)
 
     # ================================================================ recommend mode
 
@@ -361,12 +434,15 @@ class AIApp:
             self.draw_assist()
         else:
             self.draw_watch()
+        self.draw_models()
         pygame.display.flip()
 
     # ================================================================ loop
 
     def on_key(self, key):
-        if key == pygame.K_TAB:
+        if key == pygame.K_m and self.models:
+            self.select_model((self.model_i + 1) % len(self.models))
+        elif key == pygame.K_TAB:
             self.mode = "watch" if self.mode == "assist" else "assist"
             self.fading = []
         elif self.mode == "assist":
@@ -400,8 +476,12 @@ class AIApp:
                     return
                 if e.type == pygame.KEYDOWN:
                     self.on_key(e.key)
-                elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and self.mode == "assist":
-                    self.assist_click(e.pos)
+                elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                    hit = next((i for r, i in self.model_rects if r.collidepoint(e.pos)), None)
+                    if hit is not None:
+                        self.select_model(hit)
+                    elif self.mode == "assist":
+                        self.assist_click(e.pos)
             if self.mode == "watch":
                 self.watch_tick(pygame.time.get_ticks())
             self.draw()
@@ -409,5 +489,4 @@ class AIApp:
 
 
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "runs", "exp1", "model_best.pt")
-    AIApp(path).run()
+    AIApp(sys.argv[1] if len(sys.argv) > 1 else None).run()

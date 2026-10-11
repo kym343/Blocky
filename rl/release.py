@@ -75,7 +75,7 @@ def write_readme(infos):
         b = i["benchmark"]
         rows.append(f"| v{i['version']} | {i['date']} | {i['bump']} | {b['plan3']['mean']} | {b['plan3']['median']:.0f} | "
                     f"{b['plan3']['max']} | {b['greedy']['mean']} | {b['greedy']['max']} | "
-                    f"{i['source']['train_steps']:,} | {i['notes']} |")
+                    f"{(i['source']['train_steps'] or 0):,} | {i['notes']} |")
     text = f"""# Blocky 모델 버전
 
 최신 버전이 항상 최고 성능입니다 (더 좋을 때만 새 버전 등록). `ai_app.py`와 웹 데모의 기본 모델은 최신 버전입니다.
@@ -135,6 +135,10 @@ def main():
         raise SystemExit(f"rejected: plan3 mean {bench['plan3']['mean']} <= v{best['version']} "
                          f"{best['benchmark']['plan3']['mean']}")
 
+    extra = ck.get("extra", {})
+    if extra.get("teacher") and not extra.get("steps"):   # distilled: inherit the teacher's training length
+        teacher = next((i for i in infos if i["version"] == extra["teacher"]), {})
+        extra["steps"] = (teacher.get("source") or {}).get("train_steps")
     run_dir = os.path.dirname(os.path.abspath(args.ckpt))
     cfg_path = os.path.join(run_dir, "config.json")
     train_cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
@@ -150,8 +154,8 @@ def main():
         "bump": kind,
         "notes": args.notes,
         "source": {"run": train_cfg.get("name"), "checkpoint": os.path.relpath(args.ckpt, ROOT).replace("\\", "/"),
-                   "train_steps": ck.get("extra", {}).get("steps"),
-                   "train_eval_mean": ck.get("extra", {}).get("eval_mean")},
+                   "train_steps": extra.get("steps"), "train_eval_mean": extra.get("eval_mean"),
+                   "distilled_from": extra.get("teacher")},
         "arch": ck["config"],
         "train_config": train_cfg,
         "benchmark": bench,
@@ -164,19 +168,35 @@ def main():
     print(f"registered v{version}: plan3 mean {bench['plan3']['mean']}, greedy mean {bench['greedy']['mean']}")
 
 
-def publish_web(info):
-    """Point the web demo (docs/web) at the given version."""
+def publish_web(info, lite=None):
+    """Point the web demo (docs/web) at the given version (optionally its distilled lite model)."""
     v = info["version"]
     src = os.path.join(MODELS, f"v{v}")
     os.makedirs(export_web.OUT, exist_ok=True)
     export_web.export_data(os.path.join(export_web.OUT, "game.json"))
-    shutil.copy(os.path.join(src, f"blocky_v{v}.onnx"), os.path.join(export_web.OUT, "model.onnx"))
-    b = info["benchmark"]
-    web_info = {"version": v, "train_steps": info["source"]["train_steps"],
+    name = f"blocky_v{v}_{lite}.onnx" if lite else f"blocky_v{v}.onnx"
+    shutil.copy(os.path.join(src, name), os.path.join(export_web.OUT, "model.onnx"))
+    b = info["lite"][lite]["benchmark"] if lite else info["benchmark"]
+    web_info = {"version": v, "lite": lite, "train_steps": info["source"]["train_steps"],
                 "plan3_mean": b["plan3"]["mean"], "plan3_max": b["plan3"]["max"],
                 "greedy_mean": b["greedy"]["mean"], "greedy_max": b["greedy"]["max"]}
+    web_info["check"] = check_vector(os.path.join(export_web.OUT, "model.onnx"))
     with open(os.path.join(export_web.OUT, "model_info.json"), "w", encoding="utf-8") as f:
         json.dump(web_info, f, indent=2)
+
+
+def check_vector(onnx_path, n=6, seed=7):
+    """A few (board, tray) inputs + reference outputs; the web demo rejects backends that disagree."""
+    import random
+    import onnxruntime as ort
+    from rl.model import encode
+    rng = random.Random(seed)
+    boards = [rng.getrandbits(96) & rng.getrandbits(96) for _ in range(n)]
+    trays = [[rng.randrange(26) for _ in range(rng.randrange(3))] for _ in range(n)]
+    grid, tv = encode(boards, trays)
+    out = ort.InferenceSession(onnx_path).run(None, {"grid": grid, "tray": tv})[0]
+    return {"boards": ["".join(str(b >> i & 1) for i in range(96)) for b in boards], "trays": trays,
+            "values": [round(float(v), 5) for v in out]}
 
 
 if __name__ == "__main__":

@@ -54,5 +54,65 @@
       "moves_mean": 158.7,
       "seconds": 131
     }
+  },
+  "lite": {
+    "lite_c32b2": {
+      "arch": {
+        "ch": 32,
+        "blocks": 2
+      },
+      "params": 302537,
+      "distill_val_mae": 0.5633,
+      "samples": 2001186,
+      "benchmark": {
+        "greedy": {
+          "games": 200,
+          "mean": 549.1,
+          "median": 480.5,
+          "min": 102,
+          "max": 1878,
+          "moves_mean": 90.4,
+          "seconds": 4
+        },
+        "plan3": {
+          "games": 64,
+          "mean": 1292.2,
+          "median": 1126.0,
+          "min": 224,
+          "max": 3823,
+          "moves_mean": 200.6,
+          "seconds": 66
+        }
+      }
+    },
+    "lite_c16b2": {
+      "arch": {
+        "ch": 16,
+        "blocks": 2
+      },
+      "params": 274249,
+      "distill_val_mae": 0.6241,
+      "samples": 2001186,
+      "benchmark": {
+        "greedy": {
+          "games": 200,
+          "mean": 557.8,
+          "median": 453.0,
+          "min": 112,
+          "max": 2317,
+          "moves_mean": 92.0,
+          "seconds": 3
+        },
+        "plan3": {
+          "games": 64,
+          "mean": 1451.0,
+          "median": 1208.5,
+          "min": 322,
+          "max": 6765,
+          "moves_mean": 224.4,
+          "seconds": 71
+        }
+      }
+    }
   }
 }

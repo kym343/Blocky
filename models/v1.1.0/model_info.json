@@ -1,0 +1,38 @@
+{
+  "version": "1.1.0",
+  "date": "2026-10-11",
+  "bump": "minor",
+  "notes": "v1.0.1을 작은 신경망(32ch·2블록, 파라미터 30만)으로 지식 증류 - 웹용으로 약 7배 빠름",
+  "source": {
+    "run": "distill (teacher v1.0.1)",
+    "checkpoint": "models/v1.0.1/blocky_v1.0.1_lite_c32b2.pt",
+    "train_steps": 1800081,
+    "train_eval_mean": null,
+    "distilled_from": "1.0.1"
+  },
+  "arch": {
+    "ch": 32,
+    "blocks": 2
+  },
+  "train_config": {},
+  "benchmark": {
+    "greedy": {
+      "games": 200,
+      "mean": 549.1,
+      "median": 480.5,
+      "min": 102,
+      "max": 1878,
+      "moves_mean": 90.4,
+      "seconds": 6
+    },
+    "plan3": {
+      "games": 64,
+      "mean": 1292.2,
+      "median": 1126.0,
+      "min": 224,
+      "max": 3823,
+      "moves_mean": 200.6,
+      "seconds": 271
+    }
+  }
+}

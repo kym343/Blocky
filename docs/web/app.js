@@ -4,9 +4,15 @@
 "use strict";
 
 // ------------------------------------------------------------------ constants
-const W = 480, H = 780;
+const W = 480;
 const EDGE = 52, TRI_H = EDGE * Math.sqrt(3) / 2;
-const BOARD_X = (W - 8 * EDGE) / 2, BOARD_Y = 150, TRAY_Y = 640;
+const BOARD_X = (W - 8 * EDGE) / 2;
+// canvas layouts: PC (tall header) and mobile (compact, so board + piece picker fit on one phone screen)
+const LAYOUTS = {
+  pc:     { H: 780, BOARD_Y: 150, TRAY_Y: 640, SCORE_Y: 48, LABEL_Y: 88, SCORE_SIZE: 38, BADGE_DY: 96, BUSY_Y: 758 },
+  mobile: { H: 600, BOARD_Y: 66,  TRAY_Y: 500, SCORE_Y: 22, LABEL_Y: 48, SCORE_SIZE: 26, BADGE_DY: 82, BUSY_Y: null },
+};
+let H, BOARD_Y, TRAY_Y, SCORE_Y, LABEL_Y, SCORE_SIZE, BADGE_DY, BUSY_Y, layoutName;
 const GAP = 0.018, ROUND = 0.05, ARC_STEPS = 6;
 const BG = "#1e1e1e", EMPTY = "#3e3e3e", MANUAL = "#9696a5", TEXT = "#e6e6e6", MUTED = "#9a9a9a";
 const SCORE_C = "#6ed6be", BEST_C = "#e06e5a";
@@ -41,20 +47,31 @@ function fits(board, pl) { for (const i of pl.cells) if (board[i]) return false;
 function hasMove(board, piece) { return G.placements[piece].some(pl => fits(board, pl)); }
 
 // ------------------------------------------------------------------ model
-async function initModel() {
+/** Run the model on reference inputs; a backend that disagrees with Python is not used. */
+async function verifySession(s, check) {
+  const v = await runValues(s, check.boards.map(b => Uint8Array.from(b, ch => +ch)), check.trays);
+  return Math.max(...check.values.map((e, i) => Math.abs(e - v[i])));
+}
+
+async function initModel(check) {
   const base = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
   ort.env.wasm.wasmPaths = base;
+  // threads need cross-origin isolation (not available on GitHub Pages); proxy runs inference in a worker
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
   const want = params.get("ep");
-  const eps = want ? [want] : (navigator.gpu ? ["webgpu", "wasm"] : ["wasm"]);
+  ort.env.wasm.proxy = want !== "webgpu" && !params.has("noproxy");
+  // the lite model is small: plain WebAssembly beats WebGPU's per-call overhead, so GPU is opt-in (?ep=webgpu)
+  const eps = want && want !== "wasm" ? [want, "wasm"] : ["wasm"];   // always fall back to wasm
   let lastErr;
   for (const ep of eps) {
     try {
       const s = await ort.InferenceSession.create("web/model.onnx", { executionProviders: [ep] });
-      // smoke run: some GPUs fail only at the first inference
-      await s.run({ grid: new ort.Tensor("float32", new Float32Array(120), [1, 8, 15]),
-                    tray: new ort.Tensor("float32", new Float32Array(26), [1, 26]) });
+      // correctness check: e.g. WebGPU produced wrong values (diff ~15) for this model in ort 1.20.1
+      const diff = await verifySession(s, check);
+      if (!(diff < 1e-2)) throw new Error(`${ep} 결과 불일치 (차이 ${diff.toFixed(3)})`);
       session = s;
-      engineName = ep === "webgpu" ? "GPU (WebGPU)" : "CPU (WebAssembly)";
+      engineName = ep === "webgpu" ? "GPU (WebGPU)"
+        : `CPU (WebAssembly, ${ort.env.wasm.numThreads}스레드${ort.env.wasm.proxy ? ", 워커" : ""})`;
       return;
     } catch (e) { lastErr = e; }
   }
@@ -62,7 +79,9 @@ async function initModel() {
 }
 
 /** Afterstate values for boards (Uint8Array[96]) with remaining tray pieces. */
-async function values(boards, trays) {
+async function values(boards, trays) { return runValues(session, boards, trays); }
+
+async function runValues(sess, boards, trays) {
   const n = boards.length, out = new Float32Array(n);
   for (let s = 0; s < n; s += CHUNK) {
     const m = Math.min(CHUNK, n - s);
@@ -72,7 +91,7 @@ async function values(boards, trays) {
       for (let i = 0; i < 96; i++) if (b[i]) g[k * 120 + CY[i] * 15 + CX[i]] = 1;
       for (const p of trays[s + k]) t[k * 26 + p] += 1;
     }
-    const r = await session.run({ grid: new ort.Tensor("float32", g, [m, 8, 15]),
+    const r = await sess.run({ grid: new ort.Tensor("float32", g, [m, 8, 15]),
                                   tray: new ort.Tensor("float32", t, [m, 26]) });
     out.set(r.value.data, s);
   }
@@ -217,21 +236,28 @@ async function replan() {
   A.view = -1;
   A.plan = null;
   const token = ++A.token;
-  if (!A.sel.length) { render(); return; }
+  if (!A.sel.length) { A.busy = false; render(); return; }
   A.busy = true;
+  if (!session) { render(); return; }      // engine still loading: main() re-plans once it is ready
   render();
   const t0 = performance.now();
-  const best = await plan(A.board, A.sel, Number(document.getElementById("beam").value));
-  if (token !== A.token) return;          // selection changed while computing
-  const free = A.sel.map((_, i) => i), slots = [];
-  for (const st of best.steps) {
-    const s = free.find(i => A.sel[i] === st.piece);
-    free.splice(free.indexOf(s), 1);
-    slots.push(s);
+  // progressive: a quick plan first (shown at once), then refine with the chosen beam
+  const full = Number(document.getElementById("beam").value);
+  for (const beam of full > 2 ? [2, full] : [full]) {
+    const best = await plan(A.board, A.sel, beam);
+    if (token !== A.token) return;        // selection changed while computing
+    const free = A.sel.map((_, i) => i), slots = [];
+    for (const st of best.steps) {
+      const s = free.find(i => A.sel[i] === st.piece);
+      free.splice(free.indexOf(s), 1);
+      slots.push(s);
+    }
+    const keepView = A.plan && A.plan.steps.length === best.steps.length ? A.view : -1;
+    A.plan = { steps: best.steps, slots, score: best.score, ms: performance.now() - t0, beam, final: beam === full };
+    A.view = keepView;
+    A.busy = beam !== full;
+    render();
   }
-  A.plan = { steps: best.steps, slots, score: best.score, ms: performance.now() - t0 };
-  A.busy = false;
-  render();
 }
 function planColors() {
   // colors before each step, and after the last
@@ -261,10 +287,10 @@ function setSelection(sel, colors) {
 }
 
 function renderAssist() {
-  text(String(A.total), W * 0.25, 48, 38, SCORE_C);
-  text("누적 점수", W * 0.25, 88, 15, MUTED, "center", "400");
-  text(A.plan ? `+${A.plan.score}` : "–", W * 0.75, 48, 38, BEST_C);
-  text("이번 추천 점수", W * 0.75, 88, 15, MUTED, "center", "400");
+  text(String(A.total), W * 0.25, SCORE_Y, SCORE_SIZE, SCORE_C);
+  text("누적 점수", W * 0.25, LABEL_Y, 14, MUTED, "center", "400");
+  text(A.plan ? `+${A.plan.score}` : "–", W * 0.75, SCORE_Y, SCORE_SIZE, BEST_C);
+  text("이번 추천 점수", W * 0.75, LABEL_Y, 14, MUTED, "center", "400");
 
   const steps = A.plan ? A.plan.steps : [];
   if (!steps.length) {
@@ -284,11 +310,12 @@ function renderAssist() {
   A.sel.forEach((p, i) => drawPiece(ctx, p, ...trayOrigin(i, p), EDGE, A.selColors[i]));
   if (A.plan) A.plan.slots.forEach((slot, k) => {
     const [cx, cy] = slotCenter(slot);
-    ctx.beginPath(); ctx.arc(cx, cy + 96, 13, 0, 2 * Math.PI); ctx.fillStyle = "#fafafa"; ctx.fill();
-    text(String(k + 1), cx, cy + 97, 16, "#1e1e1e");
+    ctx.beginPath(); ctx.arc(cx, cy + BADGE_DY, 13, 0, 2 * Math.PI); ctx.fillStyle = "#fafafa"; ctx.fill();
+    text(String(k + 1), cx, cy + BADGE_DY + 1, 16, "#1e1e1e");
   });
-  if (!A.sel.length) text("오른쪽에서 블록을 고르세요", W / 2, TRAY_Y, 16, MUTED, "center", "400");
-  if (A.busy) text("AI 계산 중…", W / 2, H - 22, 15, MUTED, "center", "400");
+  if (!A.sel.length) text(layoutName === "mobile" ? "아래 목록에서 블록을 고르세요" : "오른쪽에서 블록을 고르세요",
+                          W / 2, TRAY_Y, 16, MUTED, "center", "400");
+  if (A.busy && BUSY_Y) text(A.plan ? "정밀 계산 중…" : "AI 계산 중…", W / 2, BUSY_Y, 15, MUTED, "center", "400");
 
   // side panel
   const stepsEl = document.getElementById("steps");
@@ -302,7 +329,8 @@ function renderAssist() {
     stepsEl.appendChild(li);
   });
   const status = document.getElementById("status");
-  if (A.busy) status.innerHTML = `<span class="muted">AI 계산 중…</span>`;
+  if (A.busy && A.plan) status.innerHTML = `<span class="muted">빠른 추천 표시 중 · 정밀 계산 중…</span>`;
+  else if (A.busy) status.innerHTML = `<span class="muted">AI 계산 중…</span>`;
   else if (A.plan && steps.length < A.sel.length)
     status.innerHTML = `<span class="warn">모든 블록을 놓을 수 없습니다 (${steps.length}개만 가능)</span>`;
   else if (A.plan) status.innerHTML = `<span class="muted">계산 ${Math.round(A.plan.ms)} ms</span>`;
@@ -345,10 +373,10 @@ async function watchStep() {
   if (Wt.running) Wt.timer = setTimeout(watchStep, Number(document.getElementById("wspeed").value));
 }
 function renderWatch() {
-  text(String(Wt.score), W * 0.25, 48, 38, SCORE_C);
-  text("점수", W * 0.25, 88, 15, MUTED, "center", "400");
-  text(String(Wt.moves), W * 0.75, 48, 38, BEST_C);
-  text("둔 수", W * 0.75, 88, 15, MUTED, "center", "400");
+  text(String(Wt.score), W * 0.25, SCORE_Y, SCORE_SIZE, SCORE_C);
+  text("점수", W * 0.25, LABEL_Y, 14, MUTED, "center", "400");
+  text(String(Wt.moves), W * 0.75, SCORE_Y, SCORE_SIZE, BEST_C);
+  text("둔 수", W * 0.75, LABEL_Y, 14, MUTED, "center", "400");
   drawCells(Wt.board, Wt.colors, { highlight: Wt.last });
   Wt.tray.forEach((p, i) => { if (p !== null) drawPiece(ctx, p, ...trayOrigin(i, p), EDGE, Wt.trayColors[i]); });
   if (Wt.over) {
@@ -412,6 +440,23 @@ function buildPicker() {
     el.appendChild(c);
   });
 }
+
+function setLayout(name, remember) {
+  layoutName = name;
+  ({ H, BOARD_Y, TRAY_Y, SCORE_Y, LABEL_Y, SCORE_SIZE, BADGE_DY, BUSY_Y } = LAYOUTS[name]);
+  canvas.height = H;
+  document.body.classList.toggle("mobile", name === "mobile");
+  document.querySelectorAll("#layout button").forEach(b => b.classList.toggle("on", b.dataset.layout === name));
+  if (remember) { try { localStorage.setItem("blocky-layout", name); } catch (e) { /* storage blocked */ } }
+  render();
+}
+function initialLayout() {
+  if (params.get("layout") in LAYOUTS) return params.get("layout");
+  try { const saved = localStorage.getItem("blocky-layout"); if (saved in LAYOUTS) return saved; } catch (e) { /* ignore */ }
+  return matchMedia("(max-width: 760px)").matches ? "mobile" : "pc";
+}
+document.querySelectorAll("#layout button").forEach(b => { b.onclick = () => setLayout(b.dataset.layout, true); });
+setLayout(initialLayout(), false);
 
 function setMode(m) {
   mode = m;
@@ -493,16 +538,24 @@ async function selftest() {
     G = g;
     RS = g.reward_scale;
     G.cells.forEach(([x, y]) => { CX.push(x); CY.push(y); });
-    await initModel();
-    const score = info.plan3_mean !== undefined
-      ? `3개 계획 평균 ${Math.round(info.plan3_mean)}점 (최고 ${info.plan3_max}) · 1수씩 평균 ${Math.round(info.greedy_mean)}점`
-      : `평가 평균 ${info.eval_mean}점`;
-    document.getElementById("engine").textContent =
-      `모델 v${info.version} · ${score} · ${(info.train_steps / 1e6).toFixed(1)}M 수 학습 · 연산: ${engineName}`;
+    // the board and piece picker work before the AI engine is ready
     buildPicker();
     wire();
     newTray();
+    if (params.has("pick")) {               // e.g. ?pick=14,25,3 preselects pieces (demo / sharing)
+      const ps = params.get("pick").split(",").map(Number).filter(p => p >= 0 && p < G.pieces.length).slice(0, 3);
+      setSelection(ps, []);
+    }
+    const engineEl = document.getElementById("engine");
+    engineEl.textContent = "AI 엔진 불러오는 중… (처음 한 번만 몇 초 걸립니다)";
     render();
+    await initModel(info.check);
+    const score = info.plan3_mean !== undefined
+      ? `3개 계획 평균 ${Math.round(info.plan3_mean)}점 (최고 ${info.plan3_max}) · 1수씩 평균 ${Math.round(info.greedy_mean)}점`
+      : `평가 평균 ${info.eval_mean}점`;
+    engineEl.textContent =
+      `모델 v${info.version}${info.lite ? " 경량(웹용)" : ""} · ${score} · ${(info.train_steps / 1e6).toFixed(1)}M 수 학습 · 연산: ${engineName}`;
+    replan();
     if (params.has("selftest")) await selftest();
   } catch (e) {
     document.getElementById("engine").innerHTML = `<span class="warn">모델을 불러오지 못했습니다: ${e}</span>`;

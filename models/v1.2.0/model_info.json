@@ -1,0 +1,38 @@
+{
+  "version": "1.2.0",
+  "date": "2026-10-11",
+  "bump": "minor",
+  "notes": "v1.0.1을 더 작은 신경망(16ch·2블록)으로 지식 증류 - 웹에서 더 빠름",
+  "source": {
+    "run": null,
+    "checkpoint": "models/v1.0.1/blocky_v1.0.1_lite_c16b2.pt",
+    "train_steps": 1800081,
+    "train_eval_mean": null,
+    "distilled_from": "1.0.1"
+  },
+  "arch": {
+    "ch": 16,
+    "blocks": 2
+  },
+  "train_config": {},
+  "benchmark": {
+    "greedy": {
+      "games": 200,
+      "mean": 557.8,
+      "median": 453.0,
+      "min": 112,
+      "max": 2317,
+      "moves_mean": 92.0,
+      "seconds": 3
+    },
+    "plan3": {
+      "games": 64,
+      "mean": 1451.0,
+      "median": 1208.5,
+      "min": 322,
+      "max": 6765,
+      "moves_mean": 224.4,
+      "seconds": 67
+    }
+  }
+}

@@ -45,15 +45,51 @@
   select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px; font: inherit; }
   .help { font-size: 13px; color: var(--muted); }
   .help b { color: var(--text); }
+  .howto { margin: 4px 0 10px; padding-left: 22px; }
+  .howto li { margin-bottom: 12px; padding-left: 2px; line-height: 1.6; }
   footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
   footer a { color: var(--accent); }
+  .titlebar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
+  .seg button { background: var(--panel); color: var(--muted); border: 0; padding: 6px 12px; font: inherit; cursor: pointer; }
+  .seg button.on { background: var(--gold); color: #1e1e1e; font-weight: 700; }
+
+  /* ---- mobile layout: board on top, piece picker right below, no side-by-side columns ---- */
+  body.mobile .wrap { padding: 8px 10px; }
+  body.mobile header h1 { font-size: 20px; margin: 0; }
+  body.mobile header p { display: none; }
+  body.mobile .tabs { margin: 6px 0; }
+  body.mobile .tabs button { padding: 5px 10px; font-size: 14px; }
+  body.mobile main { flex-direction: column; gap: 6px; }
+  body.mobile .boardcard, body.mobile .side { flex: none; width: 100%; }
+  body.mobile #board { max-width: 100%; }
+  body.mobile .side h2 { display: none; }
+  body.mobile .picker { grid-template-columns: repeat(9, 1fr); gap: 3px; }
+  body.mobile .picker canvas { border-radius: 6px; }
+  body.mobile .row { margin: 6px 0; gap: 6px; }
+  body.mobile .btn { padding: 7px 11px; }
+  body.mobile .steps { margin: 6px 0; }
+  body.mobile .steps li { padding: 3px 8px; font-size: 14px; }
+  body.mobile #howto { display: none; }
+  body.mobile #assist-panel { display: flex; flex-direction: column; }
+  body.mobile #assist-panel > * { order: 5; }
+  body.mobile #picker { order: 1; }
+  body.mobile #planrow { order: 2; }
+  body.mobile #status { order: 3; }
+  body.mobile #steps { order: 4; }
+  body.mobile footer { margin-top: 12px; }
   #selftest { white-space: pre-wrap; font-family: monospace; font-size: 12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Blocky <span>AI</span></h1>
+    <div class="titlebar">
+      <h1>Blocky <span>AI</span></h1>
+      <div id="layout" class="seg" role="group" aria-label="화면 모드">
+        <button data-layout="pc">PC</button><button data-layout="mobile">모바일</button>
+      </div>
+    </div>
     <p>강화학습(Afterstate TD 학습)으로 훈련한 AI가 대기 블록 3개를 놓을 순서와 위치를 추천합니다.</p>
   </header>
 
@@ -73,7 +109,7 @@
         <div id="picker" class="picker"></div>
         <div class="status" id="status"></div>
         <ul class="steps" id="steps"></ul>
-        <div class="row">
+        <div class="row" id="planrow">
           <button class="btn primary" id="apply" disabled>추천대로 적용</button>
           <button class="btn" id="prev" disabled>◀</button>
           <span id="viewlabel" class="muted">전체 보기</span>
@@ -91,10 +127,16 @@
           </label>
         </div>
         <div class="help">
-          <p><b>사용법</b> ① 보드의 삼각형을 클릭해 실제 게임 보드와 똑같이 채웁니다. ② 오른쪽에서 지금 나온 블록 3개를 고릅니다.
-            ③ 보드에 표시된 <b>1·2·3 순서</b>대로 두면 됩니다. ◀ ▶ 로 단계별로 보면 지워질 줄이 밝게 표시됩니다.
-            ④ <b>추천대로 적용</b>을 누르면 줄 삭제까지 반영되고 다음 3개를 고를 수 있습니다.</p>
-          <p>아래 대기 블록을 클릭하면 선택이 취소됩니다.</p>
+          <div id="howto">
+          <p><b>사용법</b></p>
+          <ol class="howto">
+            <li>보드의 삼각형을 클릭해 실제 게임 보드와 똑같이 채웁니다.</li>
+            <li>위 목록에서 지금 나온 블록 3개를 고릅니다.</li>
+            <li>보드에 표시된 <b>1·2·3 순서</b>대로 두면 됩니다. ◀ ▶ 로 단계별로 보면 지워질 줄이 밝게 표시됩니다.</li>
+            <li><b>추천대로 적용</b>을 누르면 줄 삭제까지 반영되고, 다음 3개를 고를 수 있습니다.</li>
+          </ol>
+          <p>보드 아래 대기 블록을 클릭하면 선택이 취소됩니다.</p>
+          </div>
         </div>
       </section>
 

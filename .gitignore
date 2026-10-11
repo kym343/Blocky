@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+highscore.json
+runs/
+*.pt
+*.7z
